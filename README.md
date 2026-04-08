@@ -2,6 +2,8 @@
 
 ![TeachDeck Dashboard](https://img.shields.io/badge/Status-Active-success) ![React](https://img.shields.io/badge/React-18-blue) ![Vite](https://img.shields.io/badge/Vite-5-purple) ![Groq](https://img.shields.io/badge/Powered_by-Groq_Llama_3-orange)
 
+🚀 **Live Deployment**: [https://teachdeck.vercel.app/](https://teachdeck.vercel.app/)
+
 **TeachDeck** is a serverless, browser-native AI Teacher Copilot designed to automate the grading of handwritten student assignments. 
 
 By leveraging the speed of **Groq's Llama-3 API** entirely on the frontend, TeachDeck eliminates the need for expensive backends. It processes images via client-side OCR and evaluates handwritten answers against teacher-defined keywords with hyper-fast intelligence.
@@ -59,3 +61,18 @@ You will need Node.js installed and a valid API key from [Groq](https://console.
 2. **Grading Criteria**: Input the exact exam question. Optionally, input comma-separated required **Keywords**.
 3. **Upload Student Answer**: Drag and drop a student's handwritten JPG or a typed PDF document.
 4. **Run AI Grading**: TeachDeck will extract the text, perform layout analysis, and interface with Llama-3 to grade the concept. It strictly matches against your keywords and outputs grammar corrections directly onto your dashboard.
+
+---
+
+## 👥 About Us
+
+**Team Name:** Xcess Denied
+
+**Members:**
+- Akshay Saxena
+- Dhruv Bajpai
+
+### Our Solution
+TeachDeck was architected to democratize AI tooling for educators. Traditional grading systems suffer from expensive, centralized backends and slow processing times. By leveraging **in-browser OCR (Tesseract)** coupled directly with **Groq's hyper-fast Llama-3 API**, we entirely eliminated backend hosting bottlenecks. 
+
+TeachDeck runs mathematically inside the browser, allowing teachers to drag, drop, and aggressively grade handwritten tests and concept maps in milliseconds. Our secondary feature—a holistic student feedback module—generates fully isolated "What You're Good At / What Needs Work" templates without requiring hard-coded criteria, empowering classrooms completely server-free.

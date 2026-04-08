@@ -2,9 +2,22 @@ import React, { useState, useRef } from 'react';
 import Tesseract from 'tesseract.js';
 import * as pdfjsLib from 'pdfjs-dist';
 import CyberneticGridShader from './components/ui/cybernetic-grid-shader';
+import { SmokeBackground } from './components/ui/spooky-smoke-animation';
 
 // Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+
+const extractTextFromPDF = async (pdfFile) => {
+  const arrayBuffer = await pdfFile.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let fullText = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      fullText += textContent.items.map(s => s.str).join(" ") + " ";
+  }
+  return fullText.trim();
+};
 
 // ==========================================
 // LANDING PAGE VIEW
@@ -35,8 +48,8 @@ function LandingPage({ setView }) {
         <ul className="hidden md:flex flex-row gap-8 items-center cursor-pointer">
           <li><span onClick={() => setView('home')} className="text-sm text-foreground transition-colors hover:text-foreground">Home</span></li>
           <li><span onClick={() => setView('studio')} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Studio</span></li>
-          <li><span className="text-sm text-muted-foreground transition-colors hover:text-foreground">Journal</span></li>
-          <li><span className="text-sm text-muted-foreground transition-colors hover:text-foreground">About</span></li>
+          <li><span onClick={() => setView('feedback')} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Feedback</span></li>
+          <li><span onClick={() => setView('about')} className="text-sm text-muted-foreground transition-colors hover:text-foreground">About</span></li>
         </ul>
 
         <button 
@@ -74,13 +87,12 @@ function LandingPage({ setView }) {
 // ==========================================
 // TEACHER COPILOT DASHBOARD VIEW
 // ==========================================
-function TeacherStudio({ setView }) {
+function TeacherStudio({ setView, results, setResults }) {
   const [criteria, setCriteria] = useState([{ id: Date.now(), question: "", keywords: "" }]);
   const [file, setFile] = useState(null);
   const [isHovering, setIsHovering] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingText, setLoadingText] = useState("");
-  const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
   
   const fileInputRef = useRef(null);
@@ -103,18 +115,6 @@ function TeacherStudio({ setView }) {
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       setFile(e.dataTransfer.files[0]);
     }
-  };
-
-  const extractTextFromPDF = async (pdfFile) => {
-    const arrayBuffer = await pdfFile.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let fullText = "";
-    for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-        fullText += textContent.items.map(s => s.str).join(" ") + " ";
-    }
-    return fullText.trim();
   };
 
   const submitGrading = async () => {
@@ -216,8 +216,8 @@ You MUST respond ONLY with a valid JSON object matching this exact schema:
             <ul className="hidden md:flex flex-row gap-8 items-center cursor-pointer">
               <li><span onClick={() => setView('home')} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Home</span></li>
               <li><span onClick={() => setView('studio')} className="text-sm text-foreground transition-colors hover:text-foreground">Studio</span></li>
-              <li><span className="text-sm text-muted-foreground transition-colors hover:text-foreground">Journal</span></li>
-              <li><span className="text-sm text-muted-foreground transition-colors hover:text-foreground">About</span></li>
+              <li><span onClick={() => setView('feedback')} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Feedback</span></li>
+              <li><span onClick={() => setView('about')} className="text-sm text-muted-foreground transition-colors hover:text-foreground">About</span></li>
             </ul>
 
             <button 
@@ -407,15 +407,274 @@ You MUST respond ONLY with a valid JSON object matching this exact schema:
 }
 
 // ==========================================
+// STUDENT FEEDBACK VIEW
+// ==========================================
+function StudentFeedback({ setView }) {
+  const [file, setFile] = useState(null);
+  const [isHovering, setIsHovering] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadingText, setLoadingText] = useState("");
+  const [generalFeedback, setGeneralFeedback] = useState(null);
+  const [error, setError] = useState(null);
+  
+  const fileInputRef = useRef(null);
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsHovering(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      setFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const evaluateGeneralSubmission = async () => {
+    if (!file) return;
+    setIsLoading(true);
+    setGeneralFeedback(null);
+    setError(null);
+    
+    try {
+      let studentText = "";
+      const ext = file.name.split('.').pop().toLowerCase();
+      
+      setLoadingText("Extracting Text from Document...");
+      if (['jpg', 'jpeg', 'png'].includes(ext)) {
+        const result = await Tesseract.recognize(file, 'eng');
+        studentText = result.data.text.trim();
+      } else if (ext === 'pdf') {
+        studentText = await extractTextFromPDF(file);
+      } else {
+        throw new Error("Unsupported file format. Please upload PDF, JPG, or PNG.");
+      }
+
+      if (!studentText) throw new Error("No readable text found in the document.");
+
+      setLoadingText("Running Generalized AI Evaluation...");
+      
+      const prompt = `You are an elite Teacher Copilot evaluating a student's submission.
+The student submitted the following raw OCR text:
+'${studentText}'
+
+Analyze the student answer block holistically. Provide general feedback detailing:
+1. What the student is good at (strengths, good mechanics, logical flow, etc.)
+2. What the student needs to improve on (weaknesses, grammar, conceptual misunderstandings)
+
+You MUST respond ONLY with a valid JSON object matching this exact schema:
+{
+  "strengths": "string, 3-4 sentences detailing what the student is doing well.",
+  "improvements": "string, 3-4 sentences detailing what mechanics or concepts they need to improve upon."
+}`;
+
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${import.meta.env.VITE_GROQ_API_KEY}`
+        },
+        body: JSON.stringify({
+            model: "llama-3.1-8b-instant",
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.1,
+            response_format: { type: "json_object" }
+        })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(`Groq API Error: ${errData.error?.message || res.statusText}`);
+      }
+
+      const data = await res.json();
+      const parsedData = JSON.parse(data.choices[0].message.content);
+      setGeneralFeedback(parsedData);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="relative min-h-screen text-main flex flex-col items-center justify-center p-8 overflow-y-auto">
+      <SmokeBackground smokeColor="#9D4BFF" />
+      
+      <nav className="fixed top-0 z-20 flex flex-row items-center justify-between px-8 py-6 w-full max-w-7xl">
+        <div 
+          className="text-3xl tracking-tight text-foreground cursor-pointer"
+          style={{ fontFamily: "var(--font-display)" }}
+          onClick={() => setView('home')}
+        >
+          TeachDeck<sup className="text-xs">®</sup>
+        </div>
+        
+        <ul className="hidden md:flex flex-row gap-8 items-center cursor-pointer">
+          <li><span onClick={() => setView('home')} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Home</span></li>
+          <li><span onClick={() => setView('studio')} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Studio</span></li>
+          <li><span onClick={() => setView('feedback')} className="text-sm text-foreground transition-colors hover:text-foreground">Feedback</span></li>
+          <li><span onClick={() => setView('about')} className="text-sm text-muted-foreground transition-colors hover:text-foreground">About</span></li>
+        </ul>
+
+        <button 
+          onClick={() => setView('studio')} 
+          className="text-sm text-foreground hover:text-neon-purple transition-colors duration-300"
+        >
+          Return to Studio →
+        </button>
+      </nav>
+
+      <div className="relative z-10 w-full max-w-3xl pt-24 pb-16">
+        {!generalFeedback && !isLoading && (
+            <div className="glass-card p-12 text-center animate-[fade-rise_0.6s_ease-out]">
+              <h1 className="font-display text-5xl mb-4 bg-clip-text text-transparent bg-gradient-to-b from-white to-white/60">Holistic Grading</h1>
+              <p className="text-muted-foreground mb-8">Upload any document. We'll tell you what they're good at, and what needs work.</p>
+              
+              <div 
+                className={`upload-zone border-neon-purple/30 shadow-[0_0_15px_rgba(157,75,255,0.1)] ${isHovering ? 'dragover' : ''}`}
+                onDragOver={(e) => { e.preventDefault(); setIsHovering(true); }}
+                onDragLeave={() => setIsHovering(false)}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <div className="upload-icon text-4xl mb-4">📄</div>
+                <p className="text-white">Drag & Drop a PDF, JPG, or PNG here</p>
+                <p className="sub-text mt-2 text-neon-purple">or click to browse files</p>
+                <input 
+                  type="file" 
+                  ref={fileInputRef} 
+                  accept=".pdf, .jpg, .jpeg, .png" 
+                  hidden 
+                  onChange={(e) => {
+                    if (e.target.files?.length) setFile(e.target.files[0]);
+                  }}
+                />
+              </div>
+              
+              {file && <div className="file-name text-neon-purple font-medium text-center my-4">Selected: {file.name}</div>}
+              
+              <button 
+                className="studio-btn mt-6 w-full py-4 text-lg font-semibold text-white rounded-xl active-sign-glow shadow-[0_0_15px_rgba(157,75,255,0.4)] border-neon-purple disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                disabled={!file}
+                onClick={evaluateGeneralSubmission}
+              >
+                Generate General Feedback
+              </button>
+              {error && <p className="text-red-500 mt-4 text-center">{error}</p>}
+            </div>
+        )}
+
+        {isLoading && (
+            <div className="glass-card p-12 text-center py-20 animate-[fade-rise_0.6s_ease-out]">
+                <div className="spinner mx-auto mb-6" style={{ borderColor: "rgba(157,75,255,0.2)", borderTopColor: "var(--neon-purple)" }}></div>
+                <p className="text-white text-lg">{loadingText}</p>
+                <p className="text-neon-purple mt-2 text-sm opacity-70">Llama 3 Instruct</p>
+            </div>
+        )}
+
+        {generalFeedback && !isLoading && (
+            <div className="glass-card p-12 animate-[fade-rise_0.6s_ease-out]">
+                <h1 className="font-display text-5xl mb-8 bg-clip-text text-transparent bg-gradient-to-b from-white to-white/60 text-center">Evaluation Complete</h1>
+                
+                <div className="space-y-8">
+                    <div className="result-block bg-black/40 p-6 rounded-xl border border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.1)]">
+                        <h4 className="text-xs uppercase tracking-wider text-emerald-400 font-semibold mb-4">Strengths & Capabilities</h4>
+                        <p className="text-white text-lg leading-relaxed">{generalFeedback.strengths}</p>
+                    </div>
+
+                    <div className="result-block bg-black/40 p-6 rounded-xl border border-neon-purple/30 shadow-[0_0_15px_rgba(157,75,255,0.15)]">
+                        <h4 className="text-xs uppercase tracking-wider text-neon-purple font-semibold mb-4">Areas for Improvement</h4>
+                        <p className="text-white text-lg leading-relaxed">{generalFeedback.improvements}</p>
+                    </div>
+
+                    <div className="pt-8 mt-8 border-t border-white/10 flex justify-between items-center text-sm">
+                        <span className="text-muted-foreground">Generated by Llama 3 Instruct</span>
+                        <button 
+                            onClick={() => { setGeneralFeedback(null); setFile(null); }}
+                            className="text-neon-purple hover:text-white transition-colors"
+                        >
+                            Evaluate Another File →
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// ABOUT TEAM VIEW
+// ==========================================
+function AboutTeam({ setView }) {
+  return (
+    <div className="relative min-h-screen text-main flex flex-col items-center justify-center p-8 overflow-y-auto">
+      <nav className="fixed top-0 z-20 flex flex-row items-center justify-between px-8 py-6 w-full max-w-7xl">
+        <div 
+          className="text-3xl tracking-tight text-foreground cursor-pointer"
+          style={{ fontFamily: "var(--font-display)" }}
+          onClick={() => setView('home')}
+        >
+          TeachDeck<sup className="text-xs">®</sup>
+        </div>
+        
+        <ul className="hidden md:flex flex-row gap-8 items-center cursor-pointer">
+          <li><span onClick={() => setView('home')} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Home</span></li>
+          <li><span onClick={() => setView('studio')} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Studio</span></li>
+          <li><span onClick={() => setView('feedback')} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Feedback</span></li>
+          <li><span onClick={() => setView('about')} className="text-sm text-foreground transition-colors hover:text-foreground">About</span></li>
+        </ul>
+
+        <button 
+          onClick={() => setView('home')} 
+          className="text-sm text-foreground hover:text-neon-purple transition-colors duration-300"
+        >
+          Back to Home →
+        </button>
+      </nav>
+
+      <div className="relative z-10 w-full max-w-3xl pt-24 pb-16">
+        <div className="glass-card p-12 animate-[fade-rise_0.6s_ease-out]">
+          <h1 className="font-display text-5xl mb-2 bg-clip-text text-transparent bg-gradient-to-b from-white to-white/60 text-center">Our Mission</h1>
+          <p className="text-neon-purple font-semibold text-lg mb-10 text-center uppercase tracking-widest">Team Xcess Denied</p>
+          
+          <div className="space-y-8 text-left">
+              <div className="result-block bg-black/40 p-6 rounded-xl border border-white/10 shadow-[0_0_15px_rgba(255,255,255,0.05)]">
+                  <h4 className="text-xs uppercase tracking-wider font-semibold mb-4 text-neon-blue">The Creators</h4>
+                  <ul className="text-muted-foreground space-y-2 list-none">
+                      <li className="flex items-center"><span className="text-neon-blue mr-3">✦</span> Akshay Saxena</li>
+                      <li className="flex items-center"><span className="text-neon-blue mr-3">✦</span> Dhruv Bajpai</li>
+                  </ul>
+              </div>
+
+              <div className="result-block bg-black/40 p-6 rounded-xl border border-white/10 shadow-[0_0_15px_rgba(255,255,255,0.05)]">
+                  <h4 className="text-xs uppercase tracking-wider font-semibold mb-4 text-neon-purple">The Architecture</h4>
+                  <p className="text-muted-foreground leading-relaxed">
+                      TeachDeck was architected to democratize AI tooling for educators. Traditional grading systems suffer from expensive, centralized backends and slow processing times. 
+                  </p>
+                  <p className="text-muted-foreground leading-relaxed mt-4">
+                      By leveraging <strong className="text-white font-medium">in-browser OCR (Tesseract)</strong> coupled directly with <strong className="text-white font-medium">Groq's hyper-fast Llama-3 API</strong>, we entirely eliminated backend hosting bottlenecks. TeachDeck runs mathematically inside the browser, allowing teachers to drag, drop, and aggressively grade handwritten tests and concept maps in milliseconds.
+                  </p>
+              </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
 // ROOT APP VIEW MANAGER
 // ==========================================
 export default function App() {
   const [currentView, setCurrentView] = useState('home');
+  const [results, setResults] = useState(null);
 
   return (
     <>
       {currentView === 'home' && <LandingPage setView={setCurrentView} />}
-      {currentView === 'studio' && <TeacherStudio setView={setCurrentView} />}
+      {currentView === 'studio' && <TeacherStudio setView={setCurrentView} results={results} setResults={setResults} />}
+      {currentView === 'feedback' && <StudentFeedback setView={setCurrentView} results={results} />}
+      {currentView === 'about' && <AboutTeam setView={setCurrentView} />}
     </>
   );
 }
