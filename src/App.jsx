@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import Tesseract from 'tesseract.js';
 import * as pdfjsLib from 'pdfjs-dist';
+import CyberneticGridShader from './components/ui/cybernetic-grid-shader';
 
 // Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
@@ -34,8 +35,8 @@ function LandingPage({ setView }) {
         <ul className="hidden md:flex flex-row gap-8 items-center cursor-pointer">
           <li><span onClick={() => setView('home')} className="text-sm text-foreground transition-colors hover:text-foreground">Home</span></li>
           <li><span onClick={() => setView('studio')} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Studio</span></li>
-          <li><span className="text-sm text-muted-foreground transition-colors hover:text-foreground">About</span></li>
           <li><span className="text-sm text-muted-foreground transition-colors hover:text-foreground">Journal</span></li>
+          <li><span className="text-sm text-muted-foreground transition-colors hover:text-foreground">About</span></li>
         </ul>
 
         <button 
@@ -74,9 +75,8 @@ function LandingPage({ setView }) {
 // TEACHER COPILOT DASHBOARD VIEW
 // ==========================================
 function TeacherStudio({ setView }) {
+  const [criteria, setCriteria] = useState([{ id: Date.now(), question: "", keywords: "" }]);
   const [file, setFile] = useState(null);
-  const [question, setQuestion] = useState("");
-  const [keywords, setKeywords] = useState(""); 
   const [isHovering, setIsHovering] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingText, setLoadingText] = useState("");
@@ -84,6 +84,18 @@ function TeacherStudio({ setView }) {
   const [error, setError] = useState(null);
   
   const fileInputRef = useRef(null);
+
+  const addQuestion = () => {
+    setCriteria([...criteria, { id: Date.now(), question: "", keywords: "" }]);
+  };
+
+  const removeQuestion = (id) => {
+    setCriteria(criteria.filter(c => c.id !== id));
+  };
+
+  const updateCriteria = (id, field, value) => {
+    setCriteria(criteria.map(c => c.id === id ? { ...c, [field]: value } : c));
+  };
 
   const handleDrop = (e) => {
     e.preventDefault();
@@ -106,7 +118,7 @@ function TeacherStudio({ setView }) {
   };
 
   const submitGrading = async () => {
-    if (!file || !question.trim()) return;
+    if (!file || criteria.some(c => !c.question.trim())) return;
     setIsLoading(true);
     setResults(null);
     setError(null);
@@ -128,24 +140,35 @@ function TeacherStudio({ setView }) {
       if (!studentText) throw new Error("No readable text found in the document.");
 
       setLoadingText("Running Llama 3 Evaluation...");
-      let keywordInstruction = "";
-      if (keywords.trim()) {
-        keywordInstruction = `\nCRITICAL TEACHING RULE: The teacher supplied these REQUIRED keywords: '${keywords.trim()}'. If the student's text contains ALL of these keywords (use fuzzy matching for OCR typos), you MUST state the answer is completely correct in your feedback. If ANY are missing, state it is incorrect.`;
-      }
+      const criteriaInstruction = criteria.map((c, i) => 
+        `Question ${i+1}: '${c.question.trim()}' (Required Keywords: '${c.keywords.trim()}')`
+      ).join("\n");
 
       const prompt = `You are an elite Teacher Copilot grading an exam.
-The exam question was: '${question.trim()}'${keywordInstruction}
-The student's answer was: '${studentText}'
+The teacher has provided the following grading criteria mapping out multiple questions:
+${criteriaInstruction}
 
-Analyze the student answer for conceptual accuracy AND verify grammar.
+The student submitted the following raw OCR text (which contains the answers to all questions in a single block):
+'${studentText}'
+
+Analyze the student answer block and intelligently map the relevant text to each question. Perform conceptual accuracy grading AND verify grammar for each mapped answer.
+CRITICAL TEACHING RULE: If the student's mapped text contains ALL required keywords for a question (use fuzzy matching for OCR typos), you MUST state the answer is completely correct in your feedback for that specific question. If ANY are missing, state it is incorrect.
+
 You MUST respond ONLY with a valid JSON object matching this exact schema:
 {
-    "found_keywords": ["only list strings from the teacher's required keywords that you found. Return [] if none."],
-    "missing_keywords": ["only list strings from the teacher's required keywords that were missing. Return [] if none."],
-    "groq_feedback": "string, 1-2 sentences. If all keywords are found, definitively state 'The answer is correct.'",
-    "has_error": boolean, true ONLY if there are grammatical/spelling errors. Do NOT set to true just because a keyword missed.
-    "error_words": ["list exact misspelled grammatical words found. Leave empty [] if none."],
-    "correction": "string, the perfectly grammar-corrected version of their sentence."
+  "final_verdict": "string, a 3-4 sentence comprehensive final evaluation across all questions, specifically detailing exactly what concepts or mechanics the student needs to improve upon overall.",
+  "grades": [
+    {
+      "question_number": int,
+      "extracted_student_answer": "string, the specific sentences from the raw student text that answer this question",
+      "found_keywords": ["only list strings from the teacher's required keywords that you found. Return [] if none."],
+      "missing_keywords": ["only list strings from the teacher's required keywords that were missing. Return [] if none."],
+      "groq_feedback": "string, 1-2 sentences. If all keywords are found, definitively state 'The answer is correct.'",
+      "has_error": boolean, true ONLY if there are grammatical/spelling errors in this specific answer. Do NOT set to true just because a keyword missed.,
+      "error_words": ["list exact misspelled grammatical words found. Leave empty [] if none."],
+      "correction": "string, the perfectly grammar-corrected version of their sentence."
+    }
+  ]
 }`;
 
       const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -193,8 +216,8 @@ You MUST respond ONLY with a valid JSON object matching this exact schema:
             <ul className="hidden md:flex flex-row gap-8 items-center cursor-pointer">
               <li><span onClick={() => setView('home')} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Home</span></li>
               <li><span onClick={() => setView('studio')} className="text-sm text-foreground transition-colors hover:text-foreground">Studio</span></li>
-              <li><span className="text-sm text-muted-foreground transition-colors hover:text-foreground">About</span></li>
               <li><span className="text-sm text-muted-foreground transition-colors hover:text-foreground">Journal</span></li>
+              <li><span className="text-sm text-muted-foreground transition-colors hover:text-foreground">About</span></li>
             </ul>
 
             <button 
@@ -206,8 +229,7 @@ You MUST respond ONLY with a valid JSON object matching this exact schema:
           </nav>
 
           <div className="background-orbs z-0">
-            <div className="orb orb-1"></div>
-            <div className="orb orb-2"></div>
+             <CyberneticGridShader />
           </div>
 
           <div className="container relative z-10 pt-8 pb-32 max-w-3xl mx-auto">
@@ -220,29 +242,48 @@ You MUST respond ONLY with a valid JSON object matching this exact schema:
               <section className="glass-card input-section">
                 <h2 className="mb-6 font-display text-2xl text-white">1. Grading Criteria</h2>
                 
-                <div className="input-group">
-                  <label htmlFor="question" className="block mb-2 text-muted-foreground text-sm">What was the exam question?</label>
-                  <input 
-                    type="text" 
-                    id="question" 
-                    value={question}
-                    onChange={e => setQuestion(e.target.value)}
-                    placeholder="e.g. What did the boy do yesterday?" 
-                    autoComplete="off" 
-                  />
-                </div>
-                
-                <div className="input-group">
-                  <label htmlFor="keywords" className="block mb-2 text-muted-foreground text-sm">Required Keywords (optional, comma-separated)</label>
-                  <input 
-                    type="text" 
-                    id="keywords" 
-                    value={keywords}
-                    onChange={e => setKeywords(e.target.value)}
-                    placeholder="e.g. store, walked, yesterday" 
-                    autoComplete="off" 
-                  />
-                </div>
+                {criteria.map((c, index) => (
+                  <div key={c.id} className="mb-6 p-4 border border-white/10 rounded-xl relative bg-black/10">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-neon-blue font-semibold">Question {index + 1}</h3>
+                      {criteria.length > 1 && (
+                        <button onClick={() => removeQuestion(c.id)} className="text-red-400 hover:text-red-300 text-sm">
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    
+                    <div className="input-group mb-4">
+                      <label className="block mb-2 text-muted-foreground text-sm">What was the exam question?</label>
+                      <input 
+                        type="text" 
+                        value={c.question}
+                        onChange={e => updateCriteria(c.id, 'question', e.target.value)}
+                        placeholder="e.g. What did the boy do yesterday?" 
+                        autoComplete="off" 
+                        style={{marginBottom: 0}}
+                      />
+                    </div>
+                    
+                    <div className="input-group" style={{marginBottom: 0}}>
+                      <label className="block mb-2 text-muted-foreground text-sm">Required Keywords (optional, comma-separated)</label>
+                      <input 
+                        type="text" 
+                        value={c.keywords}
+                        onChange={e => updateCriteria(c.id, 'keywords', e.target.value)}
+                        placeholder="e.g. store, walked, yesterday" 
+                        autoComplete="off" 
+                      />
+                    </div>
+                  </div>
+                ))}
+
+                <button 
+                  onClick={addQuestion}
+                  className="w-full py-3 mt-2 rounded-xl border-2 border-dashed border-white/20 text-muted-foreground hover:text-white hover:border-white/40 transition-colors"
+                >
+                  + Add Another Question
+                </button>
 
                 <h2 className="mb-6 mt-10 font-display text-2xl text-white">2. Upload Student Answer</h2>
                 <div 
@@ -270,7 +311,7 @@ You MUST respond ONLY with a valid JSON object matching this exact schema:
                 
                 <button 
                   className="studio-btn mt-6 w-full py-4 text-lg font-semibold text-white rounded-xl active-sign-glow disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                  disabled={!file || !question.trim() || isLoading}
+                  disabled={!file || criteria.some(c => !c.question.trim()) || isLoading}
                   onClick={submitGrading}
                 >
                   {isLoading ? "Running AI Grading..." : "Run AI Grading"}
@@ -289,48 +330,72 @@ You MUST respond ONLY with a valid JSON object matching this exact schema:
                   
                   {results && !isLoading && (
                     <div id="results-content">
-                      <h2 className="font-display text-2xl text-white mb-6">Grade Report</h2>
+                      <h2 className="font-display text-3xl text-white mb-2">Grade Report</h2>
+                      <div className="mb-8 p-4 bg-black/20 rounded-lg">
+                        <h3 className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Raw Extracted Text Pipeline:</h3>
+                        <p className="text-muted-foreground text-sm leading-relaxed">{results.original_text}</p>
+                      </div>
                       
-                      <div className="result-block">
-                          <h3 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Extracted Text:</h3>
-                          <p className="text-muted-foreground">{results.original_text}</p>
-                      </div>
+                      {results.grades && results.grades.map((grade, index) => (
+                        <div key={index} className="mb-12 last:mb-0 pb-8 border-b border-white/10 last:border-0 last:pb-0">
+                          <h3 className="font-display text-2xl text-neon-blue mb-6">Question {grade.question_number} Results</h3>
 
-                      <div className="result-block highlight-block">
-                          <h3 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Groq Conceptual Analysis:</h3>
-                          {keywords.trim() && (
-                            <div className="bg-black/20 p-4 rounded-lg mb-4 text-sm">
-                              <p className="mb-2">
-                                <strong className="text-neon-blue">Found Keywords:</strong> {results.found_keywords?.length ? results.found_keywords.join(', ') : 'None'}
+                          <div className="result-block">
+                              <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Identified Answer Segment:</h4>
+                              <p className="text-muted-foreground">"{grade.extracted_student_answer}"</p>
+                          </div>
+
+                          <div className="result-block highlight-block">
+                              <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Groq Conceptual Analysis:</h4>
+                              {(grade.found_keywords?.length > 0 || grade.missing_keywords?.length > 0) && (
+                                <div className="bg-black/20 p-4 rounded-lg mb-4 text-sm">
+                                  {grade.found_keywords?.length > 0 && (
+                                    <p className="mb-2">
+                                      <strong className="text-neon-blue">Found Keywords:</strong> {grade.found_keywords.join(', ')}
+                                    </p>
+                                  )}
+                                  {grade.missing_keywords?.length > 0 && (
+                                    <p className="text-red-500">
+                                      <strong className="text-neon-purple">Missing Keywords:</strong> {grade.missing_keywords.join(', ')}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                              <p className="text-white">{grade.groq_feedback}</p>
+                          </div>
+
+                          <div className="result-block">
+                              <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Grammar Status:</h4>
+                              <p className={grade.has_error ? 'text-red-500' : 'text-emerald-500'}>
+                                {grade.has_error ? "Warning - Grammatical structures are flagged." : "General sentence structure appears clear."}
                               </p>
-                              <p className={results.missing_keywords?.length ? 'text-red-500' : 'text-white'}>
-                                <strong className="text-neon-purple">Missing Keywords:</strong> {results.missing_keywords?.length ? results.missing_keywords.join(', ') : 'None'}
-                              </p>
-                            </div>
-                          )}
-                          <p className="text-white">{results.groq_feedback}</p>
-                      </div>
+                              {grade.error_words?.length > 0 && (
+                                <ul className="mt-2 list-none space-y-1">
+                                  {grade.error_words.map((word, i) => (
+                                    <li key={i} className="text-red-500 pl-4 relative before:content-['!'] before:absolute before:left-0 before:font-bold">
+                                      {word}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                          </div>
 
-                      <div className="result-block">
-                          <h3 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Grammar Status:</h3>
-                          <p className={results.has_error ? 'text-red-500' : 'text-emerald-500'}>
-                            {results.has_error ? "Warning - Grammatical structures are flagged." : "General sentence structure appears clear."}
-                          </p>
-                          {results.error_words?.length > 0 && (
-                            <ul className="mt-2 list-none space-y-1">
-                              {results.error_words.map((word, i) => (
-                                <li key={i} className="text-red-500 pl-4 relative before:content-['!'] before:absolute before:left-0 before:font-bold">
-                                  {word}
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                      </div>
+                          <div className="result-block success-block">
+                              <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Perfected Rewrite:</h4>
+                              <p className="text-white">{grade.correction}</p>
+                          </div>
+                        </div>
+                      ))}
 
-                      <div className="result-block success-block">
-                          <h3 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Perfected Rewrite:</h3>
-                          <p className="text-white">{results.correction}</p>
-                      </div>
+                      {results.final_verdict && (
+                        <div className="mt-12 pt-8 border-t border-white/20">
+                          <h3 className="font-display text-3xl text-neon-purple mb-6">Journal: Final Verdict</h3>
+                          <div className="result-block bg-black/40 p-6 rounded-xl border border-neon-purple/30 shadow-[0_0_15px_rgba(157,75,255,0.15)]">
+                            <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3 font-semibold" style={{ color: 'var(--neon-purple)' }}>Overall Improvement Feedback:</h4>
+                            <p className="text-white text-lg leading-relaxed">{results.final_verdict}</p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </section>
