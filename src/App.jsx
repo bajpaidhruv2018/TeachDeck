@@ -647,12 +647,9 @@ function AboutTeam({ setView }) {
               </div>
 
               <div className="result-block bg-black/40 p-6 rounded-xl border border-white/10 shadow-[0_0_15px_rgba(255,255,255,0.05)]">
-                  <h4 className="text-xs uppercase tracking-wider font-semibold mb-4 text-neon-purple">The Architecture</h4>
+                  <h4 className="text-xs uppercase tracking-wider font-semibold mb-4 text-neon-purple">Solution</h4>
                   <p className="text-muted-foreground leading-relaxed">
-                      TeachDeck was architected to democratize AI tooling for educators. Traditional grading systems suffer from expensive, centralized backends and slow processing times. 
-                  </p>
-                  <p className="text-muted-foreground leading-relaxed mt-4">
-                      By leveraging <strong className="text-white font-medium">in-browser OCR (Tesseract)</strong> coupled directly with <strong className="text-white font-medium">Groq's hyper-fast Llama-3 API</strong>, we entirely eliminated backend hosting bottlenecks. TeachDeck runs mathematically inside the browser, allowing teachers to drag, drop, and aggressively grade handwritten tests and concept maps in milliseconds.
+                      we have made teachers dashboard which basically which adds questions from teacher and map keywords which teacher seeks in answer , then if the answer is grammitically correct and has all keywords it shows answer as correct and also in feedback section it shows student skill and what he lacks.
                   </p>
               </div>
           </div>

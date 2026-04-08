@@ -75,7 +75,5 @@ You will need Node.js installed and a valid API key from [Groq](https://console.
 - Akshay Saxena
 - Dhruv Bajpai
 
-### Our Solution
-TeachDeck was architected to democratize AI tooling for educators. Traditional grading systems suffer from expensive, centralized backends and slow processing times. By leveraging **in-browser OCR (Tesseract)** coupled directly with **Groq's hyper-fast Llama-3 API**, we entirely eliminated backend hosting bottlenecks. 
-
-TeachDeck runs mathematically inside the browser, allowing teachers to drag, drop, and aggressively grade handwritten tests and concept maps in milliseconds. Our secondary feature—a holistic student feedback module—generates fully isolated "What You're Good At / What Needs Work" templates without requiring hard-coded criteria, empowering classrooms completely server-free.
+### Solution
+we have made teachers dashboard which basically which adds questions from teacher and map keywords which teacher seeks in answer , then if the answer is grammitically correct and has all keywords it shows answer as correct and also in feedback section it shows student skill and what he lacks.
