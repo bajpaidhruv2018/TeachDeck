@@ -17,6 +17,8 @@ By leveraging the speed of **Groq's Llama-3 API** entirely on the frontend, Teac
 - 📝 **Browser-Native OCR**: Uses `tesseract.js` to mathematically read handwritten student answers directly from uploaded JPGs/PNGs without making external structural API calls.
 - 📑 **PDF Extraction**: Uses `pdfjs-dist` to seamlessly extract text from multi-page document uploads.
 - 🧠 **Groq Llama-3 AI Grading**: Performs high-speed fuzzy matching on handwritten OCR text. Capable of accurately mapping missing/found keywords, providing conceptual feedback, identifying grammatical errors, and rewriting perfected sentences.
+- 📊 **Holistic Feedback UI**: An independent diagnostic module where teachers can drop any document. Generates a generalized evaluation explicitly detailing the student's conceptual strengths and areas for improvement instantly.
+- 🔮 **Interactive WebGL Shaders**: Implements custom Three.js `cybernetic-grid` and `spooky-smoke` dynamic canvas shaders across the dashboard for an immersive, cinematic visual experience.
 
 ## 🛠️ Tech Stack
 
@@ -24,6 +26,7 @@ By leveraging the speed of **Groq's Llama-3 API** entirely on the frontend, Teac
 - **Styling**: Tailwind CSS + Custom CSS Keyframes (Glassmorphism)
 - **AI Processing**: Groq API (`llama-3.1-8b-instant`) strictly enforced via JSON templating.
 - **Data Parsing**: Tesseract.js (Images), PDF.js (Documents)
+- **WebGL Assets**: Three.js
 
 ## 🚀 Getting Started
 
