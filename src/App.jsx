@@ -89,11 +89,12 @@ function LandingPage({ setView }) {
 // ==========================================
 function TeacherStudio({ setView, results, setResults }) {
   const [criteria, setCriteria] = useState([{ id: Date.now(), question: "", keywords: "" }]);
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [isHovering, setIsHovering] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingText, setLoadingText] = useState("");
   const [error, setError] = useState(null);
+  const [expandedFile, setExpandedFile] = useState(null);
   
   const fileInputRef = useRef(null);
 
@@ -113,87 +114,197 @@ function TeacherStudio({ setView, results, setResults }) {
     e.preventDefault();
     setIsHovering(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      setFile(e.dataTransfer.files[0]);
+      const newFiles = Array.from(e.dataTransfer.files);
+      setFiles(prev => [...prev, ...newFiles]);
     }
   };
 
+  const removeFile = (index) => {
+    setFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const gradeOneFile = async (singleFile) => {
+    let studentText = "";
+    const ext = singleFile.name.split('.').pop().toLowerCase();
+
+    if (['jpg', 'jpeg', 'png'].includes(ext)) {
+      const result = await Tesseract.recognize(singleFile, 'eng');
+      studentText = result.data.text.trim();
+    } else if (ext === 'pdf') {
+      studentText = await extractTextFromPDF(singleFile);
+    } else {
+      throw new Error(`Unsupported file format for "${singleFile.name}". Please upload PDF, JPG, or PNG.`);
+    }
+
+    if (!studentText) throw new Error(`No readable text found in "${singleFile.name}".`);
+
+    const criteriaInstruction = criteria.map((c, i) => {
+      const kw = c.keywords.trim();
+      return `Question ${i+1}: "${c.question.trim()}"${kw ? ` | Required Keywords: [${kw.split(',').map(k => `"${k.trim()}"`).join(', ')}]` : ' | Required Keywords: none'}`;
+    }).join("\n");
+
+    const systemPrompt = `You are a deterministic exam grading engine. Your ONLY job is keyword matching and grammar checking. You do NOT give your own opinion on correctness — correctness is determined SOLELY by whether the required keywords appear in the student's text.
+
+STRICT RULES:
+1. For each question, extract the student's answer text from the raw OCR block.
+2. Check if each required keyword appears in the extracted answer. Use case-insensitive matching. Accept minor OCR typos (1-2 character differences) as a match.
+3. A keyword is FOUND if it appears in the answer (even with minor typos). A keyword is MISSING only if it truly does not appear anywhere in the answer.
+4. For groq_feedback: If missing_keywords is empty (all keywords found), you MUST write "The answer is correct. All required keywords were identified." — no exceptions. If missing_keywords is non-empty, explain which concepts are missing.
+5. GRAMMAR RULES — BE EXTREMELY CONSERVATIVE:
+   - Default has_error to false. Only set true for CLEAR, OBVIOUS grammatical errors like wrong verb tense, subject-verb disagreement, or sentence fragments.
+   - The text comes from OCR. Do NOT flag OCR artifacts (merged words, extra spaces, missing punctuation, odd capitalization) as grammar errors.
+   - Do NOT flag informal or simple writing style as errors.
+   - Do NOT flag missing articles (a, an, the) as errors — OCR often drops them.
+   - error_words must contain ONLY the exact misspelled/incorrect words copied from the student text. If you cannot point to a specific wrong word, set has_error to false and error_words to [].
+   - When in doubt, set has_error to false.
+6. NEVER contradict the keyword arrays. If found_keywords contains all required keywords, the answer IS correct.
+
+Respond ONLY with valid JSON.`;
+
+    const userPrompt = `Grade the following exam submission.
+
+GRADING CRITERIA:
+${criteriaInstruction}
+
+STUDENT'S RAW OCR TEXT:
+"""
+${studentText}
+"""
+
+Return a JSON object with this exact schema:
+{
+  "final_verdict": "string — 3-4 sentence overall evaluation. Focus on what the student should study or improve. If all questions have all keywords found, acknowledge strong performance.",
+  "grades": [
+    {
+      "question_number": 1,
+      "extracted_student_answer": "the exact sentences from the OCR text that answer this question",
+      "found_keywords": ["list ONLY keywords from the Required Keywords list that appear in the answer"],
+      "missing_keywords": ["list ONLY keywords from the Required Keywords list that do NOT appear in the answer"],
+      "groq_feedback": "If missing_keywords is empty → 'The answer is correct. All required keywords were identified.' Otherwise explain what's missing.",
+      "has_error": false,
+      "error_words": [],
+      "correction": "grammar-corrected version of the student's answer"
+    }
+  ]
+}`;
+
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${import.meta.env.VITE_GROQ_API_KEY}`
+      },
+      body: JSON.stringify({
+          model: "llama-3.1-8b-instant",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt }
+          ],
+          temperature: 0,
+          response_format: { type: "json_object" }
+      })
+    });
+
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(`Groq API Error for "${singleFile.name}": ${errData.error?.message || res.statusText}`);
+    }
+
+    const data = await res.json();
+    const parsedData = JSON.parse(data.choices[0].message.content);
+
+    // ── Client-side post-processing: override LLM feedback to guarantee consistency ──
+    if (parsedData.grades && Array.isArray(parsedData.grades)) {
+      parsedData.grades = parsedData.grades.map((grade, idx) => {
+        const teacherKeywords = criteria[idx]?.keywords
+          ?.split(',')
+          .map(k => k.trim().toLowerCase())
+          .filter(Boolean) || [];
+
+        if (teacherKeywords.length === 0) {
+          // No keywords were required — answer is correct by default
+          return { ...grade, found_keywords: [], missing_keywords: [], groq_feedback: grade.groq_feedback || "No keywords were required. Review the answer qualitatively." };
+        }
+
+        // Re-derive found/missing from the extracted answer to catch LLM mistakes
+        const answerLower = (grade.extracted_student_answer || "").toLowerCase();
+        const recomputedFound = [];
+        const recomputedMissing = [];
+
+        for (const kw of teacherKeywords) {
+          // Exact substring match (case-insensitive)
+          if (answerLower.includes(kw)) {
+            recomputedFound.push(kw);
+          } else {
+            // Fuzzy: check if any word in the answer is within edit-distance 2
+            const answerWords = answerLower.split(/\s+/);
+            const isFuzzyMatch = answerWords.some(word => {
+              if (Math.abs(word.length - kw.length) > 2) return false;
+              let diff = 0;
+              const shorter = word.length < kw.length ? word : kw;
+              const longer = word.length < kw.length ? kw : word;
+              for (let i = 0; i < shorter.length; i++) {
+                if (shorter[i] !== longer[i]) diff++;
+              }
+              diff += longer.length - shorter.length;
+              return diff <= 2;
+            });
+            if (isFuzzyMatch) {
+              recomputedFound.push(kw);
+            } else {
+              recomputedMissing.push(kw);
+            }
+          }
+        }
+
+        // Override the LLM's arrays with our deterministic computation
+        const isCorrect = recomputedMissing.length === 0;
+
+        // ── Grammar post-processing: validate error_words actually exist in the answer ──
+        let validatedErrorWords = [];
+        if (grade.error_words && Array.isArray(grade.error_words)) {
+          validatedErrorWords = grade.error_words.filter(word => {
+            if (!word || typeof word !== 'string') return false;
+            // The error word must actually appear in the student's answer
+            return answerLower.includes(word.toLowerCase());
+          });
+        }
+        const hasRealError = validatedErrorWords.length > 0;
+
+        return {
+          ...grade,
+          found_keywords: recomputedFound,
+          missing_keywords: recomputedMissing,
+          has_error: hasRealError,
+          error_words: validatedErrorWords,
+          correction: hasRealError ? grade.correction : (grade.extracted_student_answer || grade.correction),
+          groq_feedback: isCorrect
+            ? "The answer is correct. All required keywords were identified."
+            : `Incomplete — missing keyword${recomputedMissing.length > 1 ? 's' : ''}: ${recomputedMissing.join(', ')}. ${grade.groq_feedback || ''}`
+        };
+      });
+    }
+
+    parsedData.original_text = studentText;
+    parsedData.file_name = singleFile.name;
+    return parsedData;
+  };
+
   const submitGrading = async () => {
-    if (!file || criteria.some(c => !c.question.trim())) return;
+    if (files.length === 0 || criteria.some(c => !c.question.trim())) return;
     setIsLoading(true);
     setResults(null);
     setError(null);
     
     try {
-      let studentText = "";
-      const ext = file.name.split('.').pop().toLowerCase();
-      
-      setLoadingText("Extracting Text from Document...");
-      if (['jpg', 'jpeg', 'png'].includes(ext)) {
-        const result = await Tesseract.recognize(file, 'eng');
-        studentText = result.data.text.trim();
-      } else if (ext === 'pdf') {
-        studentText = await extractTextFromPDF(file);
-      } else {
-        throw new Error("Unsupported file format. Please upload PDF, JPG, or PNG.");
+      const allResults = [];
+      for (let i = 0; i < files.length; i++) {
+        setLoadingText(`Processing file ${i + 1} of ${files.length}: ${files[i].name}`);
+        const result = await gradeOneFile(files[i]);
+        allResults.push(result);
       }
-
-      if (!studentText) throw new Error("No readable text found in the document.");
-
-      setLoadingText("Running Llama 3 Evaluation...");
-      const criteriaInstruction = criteria.map((c, i) => 
-        `Question ${i+1}: '${c.question.trim()}' (Required Keywords: '${c.keywords.trim()}')`
-      ).join("\n");
-
-      const prompt = `You are an elite Teacher Copilot grading an exam.
-The teacher has provided the following grading criteria mapping out multiple questions:
-${criteriaInstruction}
-
-The student submitted the following raw OCR text (which contains the answers to all questions in a single block):
-'${studentText}'
-
-Analyze the student answer block and intelligently map the relevant text to each question. Perform conceptual accuracy grading AND verify grammar for each mapped answer.
-CRITICAL TEACHING RULE: If the student's mapped text contains ALL required keywords for a question (use fuzzy matching for OCR typos), you MUST state the answer is completely correct in your feedback for that specific question. If ANY are missing, state it is incorrect.
-
-You MUST respond ONLY with a valid JSON object matching this exact schema:
-{
-  "final_verdict": "string, a 3-4 sentence comprehensive final evaluation across all questions, specifically detailing exactly what concepts or mechanics the student needs to improve upon overall.",
-  "grades": [
-    {
-      "question_number": int,
-      "extracted_student_answer": "string, the specific sentences from the raw student text that answer this question",
-      "found_keywords": ["only list strings from the teacher's required keywords that you found. Return [] if none."],
-      "missing_keywords": ["only list strings from the teacher's required keywords that were missing. Return [] if none."],
-      "groq_feedback": "string, 1-2 sentences. If all keywords are found, definitively state 'The answer is correct.'",
-      "has_error": boolean, true ONLY if there are grammatical/spelling errors in this specific answer. Do NOT set to true just because a keyword missed.,
-      "error_words": ["list exact misspelled grammatical words found. Leave empty [] if none."],
-      "correction": "string, the perfectly grammar-corrected version of their sentence."
-    }
-  ]
-}`;
-
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${import.meta.env.VITE_GROQ_API_KEY}`
-        },
-        body: JSON.stringify({
-            model: "llama-3.1-8b-instant",
-            messages: [{ role: "user", content: prompt }],
-            temperature: 0.1,
-            response_format: { type: "json_object" }
-        })
-      });
-
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(`Groq API Error: ${errData.error?.message || res.statusText}`);
-      }
-
-      const data = await res.json();
-      const parsedData = JSON.parse(data.choices[0].message.content);
-      parsedData.original_text = studentText;
-      setResults(parsedData);
+      setResults(allResults);
+      setExpandedFile(0);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -285,7 +396,7 @@ You MUST respond ONLY with a valid JSON object matching this exact schema:
                   + Add Another Question
                 </button>
 
-                <h2 className="mb-6 mt-10 font-display text-2xl text-white">2. Upload Student Answer</h2>
+                <h2 className="mb-6 mt-10 font-display text-2xl text-white">2. Upload Student Answers</h2>
                 <div 
                   className={`upload-zone ${isHovering ? 'dragover' : ''}`}
                   onDragOver={(e) => { e.preventDefault(); setIsHovering(true); }}
@@ -294,27 +405,57 @@ You MUST respond ONLY with a valid JSON object matching this exact schema:
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <div className="upload-icon text-4xl mb-4">📄</div>
-                  <p className="text-white">Drag & Drop a PDF, JPG, or PNG here</p>
-                  <p className="sub-text mt-2">or click to browse files</p>
+                  <p className="text-white">Drag & Drop PDFs, JPGs, or PNGs here</p>
+                  <p className="sub-text mt-2">or click to browse — select multiple files</p>
                   <input 
                     type="file" 
                     ref={fileInputRef} 
                     accept=".pdf, .jpg, .jpeg, .png" 
+                    multiple
                     hidden 
                     onChange={(e) => {
-                      if (e.target.files?.length) setFile(e.target.files[0]);
+                      if (e.target.files?.length) {
+                        setFiles(prev => [...prev, ...Array.from(e.target.files)]);
+                      }
                     }}
                   />
                 </div>
                 
-                {file && <div className="file-name text-neon-blue font-medium text-center my-4">Selected: {file.name}</div>}
+                {files.length > 0 && (
+                  <div className="mt-4 space-y-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-neon-blue font-medium text-sm">{files.length} file{files.length !== 1 ? 's' : ''} selected</span>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); setFiles([]); }}
+                        className="text-red-400 hover:text-red-300 text-xs transition-colors"
+                      >
+                        Clear All
+                      </button>
+                    </div>
+                    {files.map((f, i) => (
+                      <div key={i} className="flex items-center justify-between px-4 py-2.5 rounded-lg bg-white/5 border border-white/10 group hover:border-neon-blue/30 transition-colors">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className="text-neon-blue text-xs font-mono opacity-60">{String(i + 1).padStart(2, '0')}</span>
+                          <span className="text-white text-sm truncate">{f.name}</span>
+                          <span className="text-muted-foreground text-xs">({(f.size / 1024).toFixed(1)} KB)</span>
+                        </div>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); removeFile(i); }}
+                          className="text-muted-foreground hover:text-red-400 text-sm ml-3 opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 
                 <button 
                   className="studio-btn mt-6 w-full py-4 text-lg font-semibold text-white rounded-xl active-sign-glow disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                  disabled={!file || criteria.some(c => !c.question.trim()) || isLoading}
+                  disabled={files.length === 0 || criteria.some(c => !c.question.trim()) || isLoading}
                   onClick={submitGrading}
                 >
-                  {isLoading ? "Running AI Grading..." : "Run AI Grading"}
+                  {isLoading ? "Running AI Grading..." : `Grade ${files.length || ''} File${files.length !== 1 ? 's' : ''}`}
                 </button>
                 {error && <p className="text-red-500 mt-4 text-center">{error}</p>}
               </section>
@@ -330,72 +471,100 @@ You MUST respond ONLY with a valid JSON object matching this exact schema:
                   
                   {results && !isLoading && (
                     <div id="results-content">
-                      <h2 className="font-display text-3xl text-white mb-2">Grade Report</h2>
-                      <div className="mb-8 p-4 bg-black/20 rounded-lg">
-                        <h3 className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Raw Extracted Text Pipeline:</h3>
-                        <p className="text-muted-foreground text-sm leading-relaxed">{results.original_text}</p>
-                      </div>
-                      
-                      {results.grades && results.grades.map((grade, index) => (
-                        <div key={index} className="mb-12 last:mb-0 pb-8 border-b border-white/10 last:border-0 last:pb-0">
-                          <h3 className="font-display text-2xl text-neon-blue mb-6">Question {grade.question_number} Results</h3>
+                      <h2 className="font-display text-3xl text-white mb-2">Grade Reports</h2>
+                      <p className="text-muted-foreground mb-8">{results.length} file{results.length !== 1 ? 's' : ''} evaluated</p>
 
-                          <div className="result-block">
-                              <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Identified Answer Segment:</h4>
-                              <p className="text-muted-foreground">"{grade.extracted_student_answer}"</p>
-                          </div>
+                      {results.map((fileResult, fileIndex) => (
+                        <div key={fileIndex} className="mb-6">
+                          {/* File Header — clickable to expand/collapse */}
+                          <button 
+                            onClick={() => setExpandedFile(expandedFile === fileIndex ? null : fileIndex)}
+                            className="w-full flex items-center justify-between p-5 rounded-xl bg-white/5 border border-white/10 hover:border-neon-blue/40 transition-all group"
+                          >
+                            <div className="flex items-center gap-4">
+                              <span className="text-neon-blue font-mono text-sm opacity-70">{String(fileIndex + 1).padStart(2, '0')}</span>
+                              <span className="text-white font-semibold text-lg">{fileResult.file_name}</span>
+                              {fileResult.grades && (
+                                <span className="text-xs px-2 py-1 rounded-full bg-neon-blue/10 text-neon-blue border border-neon-blue/20">
+                                  {fileResult.grades.filter(g => g.found_keywords?.length > 0 && g.missing_keywords?.length === 0).length}/{fileResult.grades.length} correct
+                                </span>
+                              )}
+                            </div>
+                            <span className={`text-muted-foreground transition-transform duration-300 ${expandedFile === fileIndex ? 'rotate-180' : ''}`}>▼</span>
+                          </button>
 
-                          <div className="result-block highlight-block">
-                              <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Groq Conceptual Analysis:</h4>
-                              {(grade.found_keywords?.length > 0 || grade.missing_keywords?.length > 0) && (
-                                <div className="bg-black/20 p-4 rounded-lg mb-4 text-sm">
-                                  {grade.found_keywords?.length > 0 && (
-                                    <p className="mb-2">
-                                      <strong className="text-neon-blue">Found Keywords:</strong> {grade.found_keywords.join(', ')}
-                                    </p>
-                                  )}
-                                  {grade.missing_keywords?.length > 0 && (
-                                    <p className="text-red-500">
-                                      <strong className="text-neon-purple">Missing Keywords:</strong> {grade.missing_keywords.join(', ')}
-                                    </p>
-                                  )}
+                          {/* Expanded File Results */}
+                          {expandedFile === fileIndex && (
+                            <div className="mt-4 ml-4 pl-6 border-l-2 border-neon-blue/20 animate-[fade-rise_0.3s_ease-out]">
+                              <div className="mb-8 p-4 bg-black/20 rounded-lg">
+                                <h3 className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Raw Extracted Text Pipeline:</h3>
+                                <p className="text-muted-foreground text-sm leading-relaxed">{fileResult.original_text}</p>
+                              </div>
+                              
+                              {fileResult.grades && fileResult.grades.map((grade, index) => (
+                                <div key={index} className="mb-12 last:mb-0 pb-8 border-b border-white/10 last:border-0 last:pb-0">
+                                  <h3 className="font-display text-2xl text-neon-blue mb-6">Question {grade.question_number} Results</h3>
+
+                                  <div className="result-block">
+                                      <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Identified Answer Segment:</h4>
+                                      <p className="text-muted-foreground">"{grade.extracted_student_answer}"</p>
+                                  </div>
+
+                                  <div className="result-block highlight-block">
+                                      <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Groq Conceptual Analysis:</h4>
+                                      {(grade.found_keywords?.length > 0 || grade.missing_keywords?.length > 0) && (
+                                        <div className="bg-black/20 p-4 rounded-lg mb-4 text-sm">
+                                          {grade.found_keywords?.length > 0 && (
+                                            <p className="mb-2">
+                                              <strong className="text-neon-blue">Found Keywords:</strong> {grade.found_keywords.join(', ')}
+                                            </p>
+                                          )}
+                                          {grade.missing_keywords?.length > 0 && (
+                                            <p className="text-red-500">
+                                              <strong className="text-neon-purple">Missing Keywords:</strong> {grade.missing_keywords.join(', ')}
+                                            </p>
+                                          )}
+                                        </div>
+                                      )}
+                                      <p className="text-white">{grade.groq_feedback}</p>
+                                  </div>
+
+                                  <div className="result-block">
+                                      <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Grammar Status:</h4>
+                                      <p className={grade.has_error ? 'text-red-500' : 'text-emerald-500'}>
+                                        {grade.has_error ? "Warning - Grammatical structures are flagged." : "General sentence structure appears clear."}
+                                      </p>
+                                      {grade.error_words?.length > 0 && (
+                                        <ul className="mt-2 list-none space-y-1">
+                                          {grade.error_words.map((word, i) => (
+                                            <li key={i} className="text-red-500 pl-4 relative before:content-['!'] before:absolute before:left-0 before:font-bold">
+                                              {word}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                  </div>
+
+                                  <div className="result-block success-block">
+                                      <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Perfected Rewrite:</h4>
+                                      <p className="text-white">{grade.correction}</p>
+                                  </div>
+                                </div>
+                              ))}
+
+                              {fileResult.final_verdict && (
+                                <div className="mt-12 pt-8 border-t border-white/20">
+                                  <h3 className="font-display text-3xl text-neon-purple mb-6">Journal: Final Verdict</h3>
+                                  <div className="result-block bg-black/40 p-6 rounded-xl border border-neon-purple/30 shadow-[0_0_15px_rgba(157,75,255,0.15)]">
+                                    <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3 font-semibold" style={{ color: 'var(--neon-purple)' }}>Overall Improvement Feedback:</h4>
+                                    <p className="text-white text-lg leading-relaxed">{fileResult.final_verdict}</p>
+                                  </div>
                                 </div>
                               )}
-                              <p className="text-white">{grade.groq_feedback}</p>
-                          </div>
-
-                          <div className="result-block">
-                              <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Grammar Status:</h4>
-                              <p className={grade.has_error ? 'text-red-500' : 'text-emerald-500'}>
-                                {grade.has_error ? "Warning - Grammatical structures are flagged." : "General sentence structure appears clear."}
-                              </p>
-                              {grade.error_words?.length > 0 && (
-                                <ul className="mt-2 list-none space-y-1">
-                                  {grade.error_words.map((word, i) => (
-                                    <li key={i} className="text-red-500 pl-4 relative before:content-['!'] before:absolute before:left-0 before:font-bold">
-                                      {word}
-                                    </li>
-                                  ))}
-                                </ul>
-                              )}
-                          </div>
-
-                          <div className="result-block success-block">
-                              <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Perfected Rewrite:</h4>
-                              <p className="text-white">{grade.correction}</p>
-                          </div>
+                            </div>
+                          )}
                         </div>
                       ))}
-
-                      {results.final_verdict && (
-                        <div className="mt-12 pt-8 border-t border-white/20">
-                          <h3 className="font-display text-3xl text-neon-purple mb-6">Journal: Final Verdict</h3>
-                          <div className="result-block bg-black/40 p-6 rounded-xl border border-neon-purple/30 shadow-[0_0_15px_rgba(157,75,255,0.15)]">
-                            <h4 className="text-xs uppercase tracking-wider text-muted-foreground mb-3 font-semibold" style={{ color: 'var(--neon-purple)' }}>Overall Improvement Feedback:</h4>
-                            <p className="text-white text-lg leading-relaxed">{results.final_verdict}</p>
-                          </div>
-                        </div>
-                      )}
                     </div>
                   )}
                 </section>
